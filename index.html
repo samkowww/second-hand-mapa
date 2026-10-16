@@ -1,0 +1,920 @@
+<!doctype html>
+<html lang="sk">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<title>Sekáče Bratislava</title>
+<meta name="description" content="Mapa second handov v Bratislave s otváracími hodinami naživo.">
+<meta name="theme-color" content="#f3f2ee" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#16171a" media="(prefers-color-scheme: dark)">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Sekáče BA">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cpath d='M32 4l26 12v40a4 4 0 0 1-4 4H10a4 4 0 0 1-4-4V16z' fill='%23d43d6f'/%3E%3Ccircle cx='32' cy='20' r='6' fill='%23fff'/%3E%3C/svg%3E">
+<!-- písma sa načítajú bez blokovania; bez internetu sa použije systémové písmo -->
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" media="print" onload="this.media='all'" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,800&family=Figtree:wght@400;600;700&family=IBM+Plex+Mono:wght@500&display=swap">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
+<style>
+/* Layout: mapa na celú obrazovku, hore kompaktná lišta s filtrami ako cenovky,
+   detail ako spodný panel s dvoma polohami (mobil) alebo bočný panel (počítač). */
+:root {
+  --bg: #f3f2ee;
+  --surface: #ffffff;
+  --surface-2: #f1efe9;
+  --ink: #17181c;
+  --muted: #62646c;
+  --line: #e2dfd7;
+  --accent: #d43d6f;
+  --accent-ink: #ffffff;
+  --open: #17a05d;
+  --closed: #d8433b;
+  --unknown: #9a9ca3;
+  --me: #1a73e8;
+  --shadow: 0 8px 24px rgba(23, 24, 28, .16), 0 2px 6px rgba(23, 24, 28, .08);
+  --font-display: "Bricolage Grotesque", "Segoe UI", system-ui, sans-serif;
+  --font-body: "Figtree", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+  --safe-t: env(safe-area-inset-top, 0px);
+  --safe-b: env(safe-area-inset-bottom, 0px);
+  --safe-l: env(safe-area-inset-left, 0px);
+  --safe-r: env(safe-area-inset-right, 0px);
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #16171a;
+    --surface: #222327;
+    --surface-2: #2b2c31;
+    --ink: #f1f0ec;
+    --muted: #a5a6ad;
+    --line: #36373d;
+    --accent: #ee5b8b;
+    --accent-ink: #1a0b11;
+    --open: #2fc979;
+    --closed: #ff6259;
+    --unknown: #7c7e86;
+    --me: #4b95ff;
+    --shadow: 0 8px 24px rgba(0, 0, 0, .5), 0 2px 6px rgba(0, 0, 0, .35);
+    color-scheme: dark;
+  }
+}
+
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+html, body { height: 100%; margin: 0; overscroll-behavior: none; }
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font: 15px/1.45 var(--font-body);
+  -webkit-font-smoothing: antialiased;
+  -webkit-text-size-adjust: 100%;
+  overflow: hidden;
+}
+button, a { touch-action: manipulation; }
+button { font: inherit; color: inherit; cursor: pointer; }
+:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+
+.app { position: fixed; inset: 0; }
+#map { position: absolute; inset: 0; background: var(--bg); }
+.map-fail { padding: 120px 24px; text-align: center; color: var(--muted); }
+
+/* ---------- horná lišta ---------- */
+.topbar {
+  position: absolute; z-index: 1000;
+  top: calc(var(--safe-t) + 10px);
+  left: max(10px, var(--safe-l));
+  right: max(10px, var(--safe-r));
+  display: flex; flex-direction: column; gap: 8px;
+  pointer-events: none;
+}
+.topbar > * { pointer-events: auto; }
+.brand {
+  align-self: flex-start;
+  display: flex; align-items: center; gap: 10px;
+  padding: 7px 14px 7px 9px;
+  background: var(--surface);
+  border-radius: 999px;
+  box-shadow: var(--shadow);
+  max-width: 100%;
+}
+.brand h1 { margin: 0; font: 800 16px/1.05 var(--font-display); letter-spacing: -.01em; white-space: nowrap; }
+.summary { margin: 2px 0 0; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.summary b { color: var(--open); font-weight: 700; }
+.tag-icon {
+  flex: none; width: 24px; height: 28px; position: relative;
+  background: var(--accent);
+  clip-path: polygon(50% 0, 100% 22%, 100% 100%, 0 100%, 0 22%);
+  border-radius: 3px;
+}
+.tag-icon::after {
+  content: ""; position: absolute; left: 50%; top: 7px; width: 6px; height: 6px;
+  transform: translateX(-50%); border-radius: 50%; background: var(--surface);
+}
+
+.filters {
+  display: flex; gap: 7px; overflow-x: auto; scrollbar-width: none;
+  margin: 0 calc(-1 * max(10px, var(--safe-r))) 0 -4px;
+  padding: 2px max(10px, var(--safe-r)) 6px 4px;
+  -webkit-mask-image: linear-gradient(90deg, #000 85%, transparent);
+          mask-image: linear-gradient(90deg, #000 85%, transparent);
+}
+.filters::-webkit-scrollbar { display: none; }
+.chip {
+  flex: none; display: inline-flex; align-items: center; gap: 7px;
+  min-height: 38px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  padding: 0 14px; border-radius: 999px;
+  font-size: 14px; font-weight: 600; white-space: nowrap;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, .08);
+}
+.chip[aria-pressed="true"] { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+.chip-open[aria-pressed="true"] { background: var(--open); border-color: var(--open); color: #fff; }
+.chip-open[aria-pressed="true"] .dot-open { background: #fff; box-shadow: none; }
+
+.dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; flex: none; }
+.dot-open { background: var(--open); box-shadow: 0 0 0 3px color-mix(in srgb, var(--open) 25%, transparent); }
+.dot-closed { background: var(--closed); }
+.dot-unknown { background: var(--unknown); }
+
+/* ---------- spodné ovládanie ---------- */
+.bottom-ui {
+  position: absolute; z-index: 1000;
+  left: max(10px, var(--safe-l)); right: max(10px, var(--safe-r));
+  bottom: calc(var(--safe-b) + 14px);
+  display: flex; align-items: flex-end; gap: 10px;
+  pointer-events: none;
+  transition: opacity .2s;
+}
+.bottom-ui > * { pointer-events: auto; }
+body.has-sheet .bottom-ui { opacity: 0; pointer-events: none; }
+body.has-sheet .bottom-ui > * { pointer-events: none; }
+.bottom-left { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
+.legend {
+  display: flex; gap: 10px; flex-wrap: wrap;
+  padding: 6px 11px; border-radius: 999px;
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  font-size: 11.5px; color: var(--muted); box-shadow: var(--shadow);
+}
+.legend span { display: inline-flex; align-items: center; gap: 5px; }
+.legend .dot { width: 8px; height: 8px; box-shadow: none; }
+.nearest {
+  max-width: 100%;
+  display: flex; align-items: center; gap: 10px;
+  min-height: 52px; padding: 8px 14px 8px 14px;
+  border: 0; border-radius: 16px;
+  background: var(--surface); box-shadow: var(--shadow); text-align: left;
+}
+.nearest .n-txt { min-width: 0; display: flex; flex-direction: column; line-height: 1.2; }
+.nearest small { font-size: 11.5px; color: var(--open); font-weight: 700; }
+.nearest b { font-size: 14.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.nearest .n-d { flex: none; font: 500 13px var(--font-mono); color: var(--muted); }
+
+.fab-stack { flex: none; display: flex; flex-direction: column; gap: 10px; }
+.fab {
+  width: 54px; height: 54px; border-radius: 50%; border: 0;
+  background: var(--surface); color: var(--ink);
+  display: grid; place-items: center; box-shadow: var(--shadow);
+}
+.fab svg { width: 24px; height: 24px; }
+.fab-locate { color: var(--me); }
+.fab-locate.is-active { background: var(--me); color: #fff; }
+.fab-locate.is-waiting svg { animation: spin 1.2s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ---------- piny ---------- */
+.pin-wrap { background: none; border: 0; display: grid; place-items: center; }
+.pin {
+  position: relative; width: 28px; height: 28px; border-radius: 50%;
+  background: var(--c); border: 3px solid #fff;
+  box-shadow: 0 2px 7px rgba(0, 0, 0, .35);
+  display: grid; place-items: center;
+  transition: transform .15s;
+}
+.pin svg { width: 14px; height: 14px; fill: #fff; }
+.pin.is-open::before {
+  content: ""; position: absolute; inset: -8px; border-radius: 50%;
+  background: var(--c); opacity: .3; z-index: -1;
+  animation: glow 2.4s ease-out infinite;
+}
+@keyframes glow { 0% { transform: scale(.55); opacity: .5; } 100% { transform: scale(1.3); opacity: 0; } }
+.pin.is-selected { transform: scale(1.4); box-shadow: 0 0 0 3px var(--accent), 0 4px 12px rgba(0,0,0,.35); }
+
+.me-wrap { background: none; border: 0; }
+.me {
+  width: 22px; height: 22px; border-radius: 50%;
+  background: var(--me); border: 3px solid #fff;
+  box-shadow: 0 0 0 1px rgba(0,0,0,.12), 0 2px 8px rgba(0, 0, 0, .35);
+  position: relative;
+}
+.me::after {
+  content: ""; position: absolute; inset: -11px; border-radius: 50%;
+  background: var(--me); opacity: .28; z-index: -1;
+  animation: glow 2s ease-out infinite;
+}
+
+/* ---------- panely ---------- */
+.sheet {
+  position: absolute; z-index: 1100;
+  left: 0; right: 0; bottom: 0;
+  height: 58%; height: 58dvh;
+  background: var(--surface);
+  border-radius: 22px 22px 0 0;
+  box-shadow: 0 -8px 30px rgba(0, 0, 0, .22);
+  transform: translateY(110%);
+  transition: transform .3s cubic-bezier(.2, .8, .2, 1), height .28s cubic-bezier(.2, .8, .2, 1);
+  display: flex; flex-direction: column;
+  padding-bottom: var(--safe-b);
+  will-change: transform, height;
+}
+.sheet.is-open { transform: translateY(0); }
+.sheet[data-snap="full"] { height: calc(100% - var(--safe-t) - 56px); height: calc(100dvh - var(--safe-t) - 56px); }
+.sheet.is-dragging { transition: none; }
+.sheet-handle {
+  flex: none; width: 100%; height: 26px; border: 0; background: none; padding: 0;
+  display: grid; place-items: center; cursor: grab;
+}
+.sheet-handle::before { content: ""; width: 42px; height: 5px; border-radius: 5px; background: var(--line); }
+.close {
+  position: absolute; top: 12px; right: max(12px, var(--safe-r)); z-index: 3;
+  width: 40px; height: 40px; border-radius: 50%; border: 0;
+  background: var(--surface-2);
+  display: grid; place-items: center;
+}
+.close svg { width: 18px; height: 18px; }
+.sheet-body {
+  flex: 1; min-height: 0;
+  overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain;
+  padding: 0 max(16px, var(--safe-r)) 24px max(16px, var(--safe-l));
+  display: flex; flex-direction: column; gap: 14px;
+}
+.sheet-body > * { flex: none; }
+
+/* hlavička detailu: na mobile malá fotka vedľa názvu, aby sa všetko dôležité zmestilo do "peek" */
+.s-top { display: grid; grid-template-columns: 96px 1fr; gap: 14px; align-items: center; padding-right: 44px; }
+.photo {
+  position: relative; margin: 0;
+  aspect-ratio: 1 / 1; max-width: 100%;
+  border-radius: 14px; overflow: hidden;
+  background: var(--surface-2);
+}
+.photo img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block; }
+.photo .ph {
+  position: absolute; inset: 0; display: grid; place-items: center;
+  background:
+    repeating-linear-gradient(135deg, transparent 0 10px, color-mix(in srgb, var(--accent) 12%, transparent) 10px 20px),
+    var(--surface-2);
+  font: 800 28px/1 var(--font-display); color: color-mix(in srgb, var(--accent) 70%, var(--ink));
+}
+.photo figcaption { display: none; }
+.sheet[data-snap="full"] .s-top { grid-template-columns: 1fr; padding-right: 0; }
+.sheet[data-snap="full"] .photo { aspect-ratio: 16 / 10; }
+.sheet[data-snap="full"] .photo figcaption {
+  display: block; position: absolute; left: 10px; bottom: 10px;
+  font-size: 11px; padding: 3px 8px; border-radius: 6px; background: rgba(0, 0, 0, .55); color: #fff;
+}
+
+.s-head { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.s-kind { font: 500 10.5px/1.2 var(--font-mono); letter-spacing: .07em; text-transform: uppercase; color: var(--accent); }
+.s-name { margin: 0; font: 800 21px/1.12 var(--font-display); letter-spacing: -.015em; text-wrap: balance; overflow-wrap: anywhere; }
+.s-addr { margin: 0; color: var(--muted); font-size: 13.5px; }
+.s-dist { color: var(--ink); font-weight: 600; white-space: nowrap; }
+
+.status {
+  display: flex; align-items: center; gap: 10px;
+  padding: 11px 14px; border-radius: 12px;
+  background: color-mix(in srgb, var(--c) 12%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--c) 35%, transparent);
+  font-size: 15px;
+}
+.status strong { color: var(--c); font-weight: 700; }
+.status span { color: var(--muted); }
+.status .dot { background: var(--c); box-shadow: none; }
+.status.is-soon span { color: var(--closed); font-weight: 600; }
+
+.actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  min-height: 50px; padding: 0 12px; border-radius: 14px;
+  font-weight: 700; font-size: 15px; text-decoration: none;
+  border: 1px solid var(--line); background: var(--surface); color: var(--ink);
+}
+.btn svg { width: 18px; height: 18px; flex: none; }
+.btn-primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.btn:active, .fab:active, .chip:active, .nearest:active { transform: scale(.97); }
+
+.hours { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+.hours caption { text-align: left; font: 700 12px/1 var(--font-body); color: var(--muted); padding: 4px 0 8px; text-transform: uppercase; letter-spacing: .07em; }
+.hours td { padding: 8px 0; border-top: 1px dashed var(--line); }
+.hours td:last-child { text-align: right; font-family: var(--font-mono); font-size: 13.5px; }
+.hours tr.today td { font-weight: 700; }
+.hours tr.today td:first-child::after { content: " · dnes"; color: var(--accent); font-weight: 600; }
+.hours .off { color: var(--muted); }
+.web { color: var(--accent); font-weight: 600; text-decoration: none; padding: 4px 0; }
+.note { margin: 0; font-size: 12px; color: var(--muted); }
+
+/* zoznam */
+.list-head { flex: none; padding: 0 64px 8px max(16px, var(--safe-l)); }
+.list-head h2 { margin: 0; font: 800 20px/1.15 var(--font-display); }
+.list-head p { margin: 3px 0 0; font-size: 13px; color: var(--muted); }
+.list {
+  flex: 1; min-height: 0; list-style: none; margin: 0; overflow-y: auto; overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  padding: 0 max(8px, var(--safe-r)) 16px max(8px, var(--safe-l));
+}
+.list button {
+  width: 100%; display: grid; grid-template-columns: 56px 1fr auto; gap: 12px; align-items: center;
+  min-height: 72px; padding: 8px; border: 0; background: none; text-align: left; border-radius: 14px;
+}
+.list button:active { background: var(--surface-2); }
+.thumb { position: relative; width: 56px; height: 56px; border-radius: 12px; overflow: hidden; background: var(--surface-2); }
+.thumb::before { content: attr(data-i); position: absolute; inset: 0; display: grid; place-items: center; font: 800 17px var(--font-display); color: var(--accent); }
+.thumb img { position: relative; width: 100%; height: 100%; object-fit: cover; display: block; }
+.li-main { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.li-name { font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.li-sub { font-size: 12.5px; color: var(--muted); display: flex; align-items: center; gap: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.li-sub .dot { width: 8px; height: 8px; box-shadow: none; }
+.li-dist { font: 500 13px var(--font-mono); color: var(--muted); font-variant-numeric: tabular-nums; }
+
+/* toast */
+.toast {
+  position: absolute; z-index: 1200; left: 50%; transform: translateX(-50%);
+  top: calc(var(--safe-t) + 120px);
+  width: max-content; max-width: calc(100% - 32px);
+  background: var(--ink); color: var(--bg);
+  padding: 11px 16px; border-radius: 12px; font-size: 14px; box-shadow: var(--shadow);
+}
+
+/* leaflet */
+/* OSM nemá tmavú verziu – v tmavom režime mapu jemne invertujeme */
+@media (prefers-color-scheme: dark) {
+  .leaflet-tile-pane { filter: invert(1) hue-rotate(180deg) brightness(.92) contrast(.88) saturate(.6); }
+}
+.leaflet-container { background: var(--bg); font-family: var(--font-body); }
+.leaflet-control-attribution { font-size: 9.5px; background: color-mix(in srgb, var(--surface) 75%, transparent) !important; color: var(--muted); }
+.leaflet-control-attribution a { color: var(--muted); }
+.leaflet-bottom.leaflet-right { bottom: var(--safe-b); }
+
+/* ---------- počítač ---------- */
+@media (min-width: 900px) {
+  .brand { padding: 10px 18px 10px 12px; }
+  .brand h1 { font-size: 19px; }
+  .tag-icon { width: 28px; height: 32px; }
+  .filters { -webkit-mask-image: none; mask-image: none; }
+  .sheet, .sheet[data-snap="full"] {
+    left: 16px; right: auto; top: 128px; bottom: 16px;
+    height: auto; width: 400px;
+    border-radius: 18px;
+    transform: translateX(calc(-100% - 40px));
+    padding-bottom: 0;
+  }
+  .sheet.is-open { transform: translateX(0); }
+  .sheet-handle { height: 12px; pointer-events: none; }
+  .sheet-handle::before { display: none; }
+  .s-top, .sheet[data-snap="full"] .s-top { grid-template-columns: 1fr; padding-right: 0; }
+  .photo, .sheet[data-snap="full"] .photo { aspect-ratio: 16 / 10; }
+  .photo figcaption { display: block; position: absolute; left: 10px; bottom: 10px; font-size: 11px; padding: 3px 8px; border-radius: 6px; background: rgba(0, 0, 0, .55); color: #fff; }
+  .s-name { font-size: 24px; }
+  body.has-sheet .bottom-ui { opacity: 1; pointer-events: none; }
+  body.has-sheet .bottom-ui > * { pointer-events: auto; }
+  .bottom-left { align-items: flex-end; }
+  .bottom-ui { left: auto; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+}
+
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="topbar">
+    <div class="brand">
+      <span class="tag-icon" aria-hidden="true"></span>
+      <div>
+        <h1>Sekáče Bratislava</h1>
+        <p class="summary" id="summary">Načítavam…</p>
+      </div>
+    </div>
+    <div class="filters" role="toolbar" aria-label="Filtre">
+      <button class="chip chip-open" id="f-open" aria-pressed="false"><span class="dot dot-open"></span>Len otvorené</button>
+      <button class="chip" data-kind="sekac" aria-pressed="false">Sekáče</button>
+      <button class="chip" data-kind="vintage" aria-pressed="false">Vintage</button>
+      <button class="chip" data-kind="swap" aria-pressed="false">Swap a charita</button>
+      <button class="chip" data-kind="trh" aria-pressed="false">Blšie trhy</button>
+    </div>
+  </header>
+
+  <div id="map" aria-label="Mapa second handov"></div>
+
+  <div class="bottom-ui">
+    <div class="bottom-left">
+      <button class="nearest" id="nearest" hidden></button>
+      <div class="legend" aria-hidden="true">
+        <span><i class="dot dot-open"></i>otvorené</span>
+        <span><i class="dot dot-closed"></i>zatvorené</span>
+        <span><i class="dot dot-unknown"></i>bez hodín</span>
+      </div>
+    </div>
+    <div class="fab-stack">
+      <button class="fab" id="btn-list" aria-label="Zoznam podľa vzdialenosti" title="Zoznam">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h10" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>
+      </button>
+      <button class="fab fab-locate" id="btn-locate" aria-label="Moja poloha" title="Moja poloha">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4" fill="currentColor"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/><circle cx="12" cy="12" r="7.5" fill="none" stroke="currentColor" stroke-width="2"/></svg>
+      </button>
+    </div>
+  </div>
+
+  <aside class="sheet" id="sheet" data-snap="peek" aria-hidden="true" aria-labelledby="s-name">
+    <button class="sheet-handle" aria-label="Roztiahnuť alebo zmenšiť panel"></button>
+    <button class="close" id="s-close" aria-label="Zavrieť">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>
+    </button>
+    <div class="sheet-body" id="sheet-body"></div>
+  </aside>
+
+  <aside class="sheet list-sheet" id="list" data-snap="full" aria-hidden="true" aria-label="Zoznam second handov">
+    <button class="sheet-handle" aria-label="Roztiahnuť alebo zmenšiť zoznam"></button>
+    <button class="close" id="l-close" aria-label="Zavrieť zoznam">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>
+    </button>
+    <div class="list-head">
+      <h2>Najbližšie sekáče</h2>
+      <p id="list-sub"></p>
+    </div>
+    <ol class="list" id="list-items"></ol>
+  </aside>
+
+  <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<script>
+// Zdroj: Google Mapy, stav k 16. 10. 2026
+window.SHOPS=[{"id":0,"name":"TEXTILE house second hand","street":"Radlinského 4","cat":"Bazár oblečenia","kind":"sekac","addr":"Radlinského 4, 811 07 Bratislava","lat":48.149975,"lng":17.114609,"pid":"ChIJlVrBz9-JbEcR2XgGUD1ZWv4","hours":[[],[[540,1140]],[[540,1140]],[[540,1140]],[[540,1140]],[[540,1140]],[[540,1020]]],"photo":"https://lh3.googleusercontent.com/grass-cs/AABkmLfqXnzZbZy9Ij_b7LiNUYMl6vnipu2hNDcSuGZlaqrs61orbAid0nUalzo5BEoo_dQ0mWDqq5zeSmZwOabL2YLAPrxcRND1maHrwaBkDufH_besO0Qdz3dNjh_wH1o5yIuOrZ1sZA=w800-h500-k-no","sv":"https://streetviewpixels-pa.googleapis.com/v1/thumbnail?panoid=mBWGS5qOfidKRgmo7FCbRQ&cb_client=search.gws-prod.grass&w=211&h=120&yaw=137.06395&pitch=2.2258143&thumbfov=100","web":null},{"id":1,"name":"TEXTILE house second hand","street":"Obchodná 50","cat":"Predajňa odevov","kind":"sekac","addr":"Obchodná 50, 811 06 Bratislava","lat":48.148015,"lng":17.11162,"pid":"ChIJl1m8ZLeJbEcRAyn8cIZ0bHU","hours":[[],[[540,1140]],[[540,1140]],[[540,1140]],[[540,1140]],[[540,1140]],[[540,1020]]],"photo":"https://lh3.googleusercontent.com/grass-cs/AABkmLf9GRfij3oV7ijAfHac9Kvm3_uFxpVJWsPE8JgKTpA37qAMD4qHvPNRa8yM-s-Pexg0Ig_lgOA-_85Ni6ImnV-6iU77S62Ik2f8rBwQA7toBZay6ohMG11dF265vSDn2inZcilOlh_b1B54=w800-h500-k-no","sv":"https://streetviewpixels-pa.googleapis.com/v1/thumbnail?panoid=VRJVeHAFMJzi8imJsB6Drw&cb_client=search.gws-prod.grass&w=211&h=120&yaw=148.84346&pitch=-7.4216003&thumbfov=100","web":"https://textilehouse.sk/bratislava-obchodna-50/"},{"id":2,"name":"GENESIS second hand fashion","street":"Rajská 2344","cat":"Obchod second hand","kind":"sekac","addr":"Rajská 2344, 811 08 Bratislava","lat":48.145999,"lng":17.114674,"pid":"ChIJd5xWEUSJbEcRSf8cv753O4o","hours":[[[540,1140]],[[540,1140]],[[540,1140]],[[540,1140]],[[540,1140]],[[540,1140]],[[540,1140]]],"photo":"https://lh3.googleusercontent.com/grass-cs/AABkmLdHILhVXjmUKCGbeZbd7K94nninwyNdc4aVYjOX0FvjZpZ80YSk8xxStDUp1p19fENgBG1KWpE5GJjtp_c0RIgEJU8U8NFF0qZaX7mtBWT67Pf2I7HcMRIVa0qo9oJ0N4ITiRAkEg=w800-h500-k-no","sv":"https://streetviewpixels-pa.googleapis.com/v1/thumbnail?panoid=5dLmyuhWME3XRtqUystM2A&cb_client=search.gws-prod.grass&w=211&h=120&yaw=162.00516&pitch=0&thumbfov=100","web":"https://www.genesis-eshop.sk/"},{"id":3,"name":"Genesis second hand fashion","street":"Obchodná 561/41","cat":"Obchod","kind":"sekac","addr":"Obchodná 561/41, 811 06 Bratislava","lat":48.14813,"lng":17.11148,"pid":"ChIJfd7WAQCJbEcRVY4POX5Fxk0","hours":[[],[[540,1080]],[[540,1080]],[[540,1080]],[[540,1080]],[[540,1080]],[]],"photo":"https://lh3.googleusercontent.com/grass-cs/AABkmLcA6vjKjVZfYOVcON1IwqkHpJQktojCxyXHDoazHpxazNtpQD_pYif_4pEBY4x3etlo9izaw5aQb1iRNiYW9VgM_El6Po4jskGyqznXFazvvjAj605KzjnaIhUS0rRLi_Y8gUF0ua7Pn6s=w800-h500-k-no","sv":"https://streetviewpixels-pa.googleapis.com/v1/thumbnail?panoid=_duCZ_5ItX21-IVE34QnaA&cb_client=search.gws-prod.grass&w=211&h=120&yaw=306.40515&pitch=0&thumbfov=100","web":null},{"id":4,"name":"Genesis second hand","street":"Cintorínska 10","cat":"Bazár","kind":"sekac","addr":"Cintorínska 10, 811 08 Bratislava","lat":48.146103,"lng":17.116402,"pid":"ChIJszp8n6OJbEcRHYxuhdxQgdQ","hours":[[],[[540,1050]],[[540,1050]],[[540,1050]],[[540,1050]],[[540,1050]],[[600,960]]],"photo":"https://lh3.googleusercontent.com/grass-cs/AABkmLcZIhTtONNdpAk2tE3jBBFa8JfujHd67gDkJlvZFYqw0aRHxVXrtb9bymQrunfSL0KbG7SyjiL3NMg--2kttd3m7Kl3du1mAstlEmkLZuWyGWKOGFlMmvyd7Riz3vKsAQFYY6w=w800-h500-k-no","sv":"https://streetviewpixels-pa.googleapis.com/v1/thumbnail?panoid=z3O-BkLdsVsDc1ykScPT7w&cb_client=search.gws-prod.grass&w=211&h=120&yaw=136.46214&pitch=0&thumbfov=100","web":"https://www.genesis-eshop.sk/"},{"id":5,"name":"Genesis second hand fashion","street":"Nedbalova 11","cat":"Bazár","kind":"sekac","addr":"Nedbalova 11, 811 08 Bratislava","lat":48.144806,"lng":17.110722,"pid":"ChIJ37NATiyJbEcR2yoZB9R8HrM","hours":[[[660,1020]],[[540,1080]],[[540,1080]],[[540,1080]],[[540,1080]],[[540,1080]],[[540,1080]]],"photo":"https://lh3.googleusercontent.com/grass-cs/AABkmLdWs9tnN8v3o_Ax50pGk1bCVEVq-_hxYOaIrTq33tyP2-XqzQZ0wtY1nOhmN6Ys-tWIi8hEeJ4V_oMMook4G8zwBxkaOdwvJ97lc7WFV1LFsJn2RxIW7RX2pvuVQdXhe_YfRGW7mqApyFTN=w800-h500-k-no","sv":"https://streetviewpixels-pa.googleapis.com/v1/thumbnail?panoid=h2imztr02nii4Kuy0LMVAA&cb_client=search.gws-prod.grass&w=211&h=120&yaw=64.50907&pitch=0&thumbfov=100","web":"https://www.genesis-eshop.sk/"},{"id":6,"name":"TEXTILE house second hand","street":"Štefanovičova 7028/7","cat":"Bazár oblečenia","kind":"sekac","addr":"Štefanovičova 7028/7, 811 04 Bratislava","lat":48.15466,"lng":17.110798,"pid":"ChIJH1nuoVGJbEcRhhRPaH1fhqw","hours":[[],[[540,1140]],[[540,1140]],[[540,1140]],[[540,1140]],[[540,1140]],[[540,1020]]],"photo":"https://lh3.googleusercontent.com/grass-cs/AABkmLfm6fvK4l-KKbcDupwDNJct7ys1z1RL91_vORolj0x2z1e3e_mKx-_elxnJIYyFMj3zaWatjlatdZGk2uoKFHU7-9jpj9Ww-lCIvbaSaZvJEbXHL5_fp5wrdBK0kjMWpnKGyvX_Rg=w800-h500-k-no","sv":"https://streetviewpixels-pa.googleapis.com/v1/thumbnail?panoid=gLjxEV5j_OMMznlRfGNVfg&cb_client=search.gws-prod.grass&w=211&h=120&yaw=36.077328&pitch=0&thumbfov=100","web":"http://www.textilehouse.sk/"},{"id":7,"name":"TYNA second hand","street":"Dunajská 2327/52","cat":"Predajňa odevov","kind":"sekac","addr":"Dunajská 2327/52, 811 08 Bratislava","lat":48.145749,"lng":17.119348,"pid":"ChIJnU_N06KJbEcRIFbW5ZTu0Co","hours":[[],[[600,1080]],[[600,1080]],[[600,1080]],[[600,1080]],[[600,1080]],[]],"photo":"https://lh3.googleusercontent.com/grass-cs/AABkmLfwFWhWb0Okuqn_2rOBgEwNmvC6XhkbwvfWXo3YRpx9OA4CLoosRUPiNXACr4odFOtwGYkRAEazVqBrC57WSJ7Q3IhdjY0XvkhFHi5444exh7UKiQnnJDDmBaskDXkYNjCtj-WdKRCgqw2q=w800-h500-k-no","sv":"https://streetviewpixels-pa.googleapis.com/v1/thumbnail?panoid=8LLhO5jHXRXuhD3et5z-HA&cb_client=search.gws-prod.grass&w=211&h=120&yaw=77.3719&pitch=0.9083319&thumbfov=100","web":null},{"id":8,"name":"Vintage shop","street":"Poštová 4","cat":"Predajňa odevov","kind":"vintage","addr":"Poštová 4, 811 06 Staré Mesto","lat":48.146654,"lng":17.109372,"pid":"ChIJC7QmWQCJbEcRu6aLOFfsYGI","hours":[[[600,1020]],[[600,1140]],[[600,1140]],[[600,1140]],[[600,1140]],[[600,1140]],[[600,1020]]],"photo":"https://lh3.googleusercontent.com/grass-cs/AABkmLfR5zb_yQI29nmazmJEtX6C87-zrPPTvp0ZUX9TaAs6q-9v86LSxeMKJVK8FevdCjfzIAUbaWppyEeTtehD7rTQJvntZKYpE-zChleUzOkk9PLjy457m7jQ7_o3DF0l6YEuumcFdfLQccw_=w800-h500-k-no","sv":"https://streetviewpixels-pa.googleapis.com/v1/thumbnail?panoid=nFKZ4ZaGu_9MH-MoLO1njg&cb_client=search.gws-prod.grass&w=211&h=120&yaw=233.64063&pitch=-0.00056615693&thumbfov=100","web":"http://textilehouse.sk/"},{"id":9,"name":"Leftovers Vintage shop","street":"Gorkého 13","cat":"Vintage odevy","kind":"vintage","addr":"Gorkého 13, 811 01 Staré Mesto","lat":48.143382,"lng":17.111722,"pid":"ChIJN7a60W2JbEcRZKa7IrylqtU","hours":[[[630,1110]],[],[],[[630,1110]],[[630,1110]],[[630,1110]],[[630,1110]]],"photo":"https://lh3.googleusercontent.com/grass-cs/AABkmLddTdOLtUQlu-0BAmB7One7PjMYp5tuEjzLjSOhkwE3JBGTDsuoJ8bI7hsj1VNT0YAcpnLbOGvFTkbVMAp8m3rn67_fQq7rNajd9YbyGaY_kCLUGABsrUOt8n7em2_mykV_NSM=w800-h500-k-no","sv":"https://streetviewpixels-pa.googleapis.com/v1/thumbnail?panoid=pLMVZmr8_LBkc8DwUzIH8g&cb_client=search.gws-prod.grass&w=211&h=120&yaw=324.42752&pitch=0&thumbfov=100","web":null},{"id":10,"name":"Vintage Shop","street":"Františkánske námestie 7","cat":"Predajňa odevov","kind":"vintage","addr":"Františkánske námestie 7, 811 01 Bratislava","lat":48.144116,"lng":17.107916,"pid":"ChIJ01fpZ-KJbEcR4RM0K6j6qow","hours":[[[600,1020]],[[600,1140]],[[600,1140]],[[600,1140]],[[600,1140]],[[600,1140]],[[600,1020]]],"photo":"https://lh3.googleusercontent.com/grass-cs/AABkmLeC90UWSmnrrNR4BM6r5RdnPpCrZfUnKxBCc-bDIxY4rIYeKI1UOXwoApJ1bAbxbqNooeQCZlfHmmRF2XZw0sZBZAwu7whccfk3MUnfHakvT1tmqlHDz0LKB2N03lfxg9HCkTGs=w800-h500-k-no","sv":"https://streetviewpixels-pa.googleapis.com/v1/thumbnail?panoid=sLzFw2FcSyyvaw1D69JUSA&cb_client=search.gws-prod.grass&w=211&h=120&yaw=210.86656&pitch=7.540495&thumbfov=100","web":"https://textilehouse.sk/frantiskanske-namestie-7-vintage-shop/"},{"id":11,"name":"Luxury vintage","street":"Námestie SNP 22","cat":"Obchod","kind":"vintage","addr":"Námestie SNP 22, 811 01 Staré Mesto","lat":48.1444,"lng":17.112594,"pid":"ChIJq7lPoUOJbEcRoy6GKMMhozg","hours":[[],[[660,1080]],[[660,1080]],[[660,1080]],[[660,1080]],[[660,1080]],[[600,900]]],"photo":"https://lh3.googleusercontent.com/grass-cs/AABkmLe51-dL_8Uw_maXUeh4O0-QNDGO45OSeoFHvhvxoFMwSBWZHjkDK381Ov1hD0CAGVtIEuw-Xp3Q9svme_Kqy6OhxnyvGxxC72-nu6deHAJCPUCRMO54ZZrb6Xc2h9xdGcPs5BDD=w800-h500-k-no","sv":"https://streetviewpixels-pa.googleapis.com/v1/thumbnail?panoid=_l_OQe4Wsrilx1_FEc2FVw&cb_client=search.gws-prod.grass&w=211&h=120&yaw=228.87192&pitch=0&thumbfov=100","web":"http://www.luxuryvintage.sk/"},{"id":12,"name":"NOX Vintage shop retro store","street":"Ventúrska 3","cat":"Obchod second hand","kind":"vintage","addr":"Ventúrska 3, 811 01 Bratislava","lat":48.14243,"lng":17.106415,"pid":"ChIJPSh7xFyJbEcRPWOX3vkHNHw","hours":[[],[],[[780,1020]],[[720,1020]],[[720,1020]],[[720,1020]],[[720,1020]]],"photo":"https://lh3.googleusercontent.com/grass-cs/AABkmLdsA17x_qP1CQnwuNrr07HX6jvFwp6lWf9r88GeUhf8BHAD5UmiyKukvk9QVma1bcX72wPrInz35fn1LFf1arUDX9sY4UoKIXd_udlIw93H3fLw0MvELF-s2nsywc5QadrfcBYsaw=w800-h500-k-no","sv":"https://streetviewpixels-pa.googleapis.com/v1/thumbnail?panoid=mqloH-AOdo8WeKrCn1RPrQ&cb_client=search.gws-prod.grass&w=211&h=120&yaw=234.34215&pitch=0&thumbfov=100","web":"https://www.facebook.com/NOXvintage/"},{"id":13,"name":"SSS Textil Second Hand","street":"Obchodná 811/06","cat":"Predajňa odevov","kind":"sekac","addr":"Obchodná 811/06, 811 06 Bratislava","lat":48.147192,"lng":17.10957,"pid":"ChIJk0YQbwCJbEcR1NlQxKZ_0Gw","hours":null,"photo":null,"sv":"https://streetviewpixels-pa.googleapis.com/v1/thumbnail?panoid=gMXrPj3vCJxY9FEPGTeiGw&cb_client=search.gws-prod.grass&w=408&h=240&yaw=321.86383&pitch=0&thumbfov=100","web":null},{"id":14,"name":"TEXTILE house second hand","street":"Páričkova 7","cat":"Obchod s použitým tovarom","kind":"sekac","addr":"Páričkova 7, 821 08 Bratislava","lat":48.148007,"lng":17.127348,"pid":"ChIJ0b6VLe6JbEcRCZPo80PWW_M","hours":[[],[[540,1140]],[[540,1140]],[[540,1140]],[[540,1140]],[[540,1140]],[[540,1020]]],"photo":"https://lh3.googleusercontent.com/grass-cs/AABkmLe53WUQ4rF01hO5aM78MuHTWSSkUAp6C5T_ac5tVQsp9lMKvWtZ8A3_yNNvD6mM9BTXtFAYcAShTKNRk1Bk4hSG7aQnwIq4XpgpdAjTSWu2xTsnMGrdwEcHjM832u2E3BiwBVqtYA=w800-h500-k-no","sv":"https://streetviewpixels-pa.googleapis.com/v1/thumbnail?panoid=SNWPu8WNYr48UVi0jv-xeA&cb_client=search.gws-prod.grass&w=211&h=120&yaw=335.2024&pitch=0&thumbfov=100","web":"https://textilehouse.sk/"},{"id":15,"name":"TEXTILE house second hand","street":"Trnavská cesta 169","cat":"Bazár oblečenia","kind":"sekac","addr":"Trnavská cesta 169, 821 02 Bratislava","lat":48.16339,"lng":17.146712,"pid":"ChIJTSIEtc-ObEcR8UgZwCebm44","hours":[[],[[540,1140]],[[540,1140]],[[540,1140]],[[540,1140]],[[540,1140]],[[540,1020]]],"photo":"https://lh3.googleusercontent.com/grass-cs/AABkmLdkWv1Wv9o5HnYamyXosp_gxvTtL9hcD3wSLxaqu2BUaZPm1xHjMVs7Vpwo6V_9ib6fQClUZ3P2EG6MRdipt8EjcorTTPMs2brwNYTPrBPxLBExDUbjNTi3_QhRzxCpsrWXnDg=w800-h500-k-no","sv":"https://streetviewpixels-pa.googleapis.com/v1/thumbnail?panoid=ZsWiuWYy7QDn4gNljnPoaQ&cb_client=search.gws-prod.grass&w=211&h=120&yaw=115.748055&pitch=-0.27775013&thumbfov=100","web":null},{"id":16,"name":"REZKE Bratislava Grösslingová","street":"Grösslingová 2460/33","cat":"Obchod second hand","kind":"swap","addr":"Grösslingová 2460/33, 811 09 Staré Mesto","lat":48.14436,"lng":17.117192,"pid":"ChIJeTRkSZyJbEcRWmKAkBHbuik","hours":[[],[[600,1140]],[[600,1140]],[[600,1140]],[[600,1140]],[[600,1140]],[[600,900]]],"photo":"https://lh3.googleusercontent.com/grass-cs/AABkmLdcmxfUEdmk8voZgWledlQklALDi1RUja89lID8Qc3awd-C9bZFi-CeWmG6hXA9sKxWnMMmJBIg4spPVwWFUg_-FeeqPSAIEDdlRrt6HRdpXNOSOIq1f4_TFBCafsBFh1FYg3jNVmutbRfD=w800-h500-k-no","sv":"https://streetviewpixels-pa.googleapis.com/v1/thumbnail?panoid=c7VJCTdf7jHWOWli8wbxag&cb_client=search.gws-prod.grass&w=211&h=120&yaw=313.07016&pitch=0&thumbfov=100","web":"https://www.rezke.sk/"},{"id":17,"name":"Ejtytu Vintage Shop","street":"Azovská 2","cat":"Vintage odevy","kind":"vintage","addr":"Azovská 2, 821 08 Bratislava","lat":48.149005,"lng":17.131561,"pid":"ChIJ4fP6giyJbEcRSl-vRCtsjiA","hours":[[[600,1020]],[[720,1140]],[[720,1140]],[[720,1140]],[[720,1140]],[[720,1140]],[[600,1020]]],"photo":"https://lh3.googleusercontent.com/grass-cs/AABkmLfIHtKEcxhZPrYMdtBHBIiM4QHLbHygNLki39g-VGcUqVIaWuIgYoSTyNrgsAJSv5NXiVpzSRdBLZP6oqRgHc1RcVgIoczDz8HEoQdhwGSHRCdVBskJijS40E8BAU-KdLVa4uImZaz0QZk=w800-h500-k-no","sv":"https://streetviewpixels-pa.googleapis.com/v1/thumbnail?panoid=eXSQSRTagQYGkZ0750jcFg&cb_client=search.gws-prod.grass&w=211&h=120&yaw=50.213425&pitch=0&thumbfov=100","web":"https://www.ejtytu.com/"},{"id":18,"name":"GERAR Vintage Shop","street":"Zámocká 34","cat":"Vintage odevy","kind":"vintage","addr":"Zámocká 34, 811 01 Bratislava-Hrad","lat":48.144617,"lng":17.101884,"pid":"ChIJMVGxiLg9FUcR4V4zz8ObkGQ","hours":[[[720,1140]],[[720,1140]],[[720,1140]],[[720,1140]],[[720,1140]],[[720,1140]],[[720,1140]]],"photo":"https://lh3.googleusercontent.com/grass-cs/AABkmLcT47l_ZLL5YCZgBre6HGOH-ArAt-gnbx3yo8fgfTCC4CaEnNe8dJAhqXkFnU4-3WJNONmApG2R8LIvd3WB2tSJppsK5TBU_lcJegqKe3K_SsmtEWblKNmMpP6horNIyStskXQ=w800-h500-k-no","sv":null,"web":"https://gerar.sk/"},{"id":19,"name":"TEXTILE house second hand","street":"Šintavská 24","cat":"Obchod second hand","kind":"sekac","addr":"Šintavská 24, 851 05 Petržalka","lat":48.106073,"lng":17.106397,"pid":"ChIJ_2BZB7yJbEcRTRVh5ZFALLc","hours":[[],[[540,1140]],[[540,1140]],[[540,1140]],[[540,1140]],[[540,1140]],[[540,1020]]],"photo":"https://lh3.googleusercontent.com/grass-cs/AABkmLd432Zw-sElcyEtNCusUZ5_ZqSbzxy60E7bJ8GzJhz0XDBTgAq-OQrH8DrHjsor1gXzormd2vmkQo-GSYhpgMiUbkSb2tFYKGEgWxEXFefqfjpit5Hh8nJYs9TcAUq2Spi2QHZs-g=w800-h500-k-no","sv":"https://streetviewpixels-pa.googleapis.com/v1/thumbnail?panoid=nJWiSag5bPCFF2ltPSRrXg&cb_client=search.gws-prod.grass&w=211&h=120&yaw=222.43985&pitch=5.9015517&thumbfov=100","web":"http://www.textilehouse.sk/"},{"id":20,"name":"Značkový sekáč","street":"Jesenského 5-9","cat":"Second hand","kind":"sekac","addr":"Jesenského 5-9, 811 01 Staré Mesto","lat":48.143061,"lng":17.112149,"pid":"ChIJre5DaReJbEcRNFF0uw3WO3E","hours":[[[840,1380]],[],[[840,1380]],[[840,1380]],[[840,1380]],[[840,1380]],[[840,1380]]],"photo":"https://lh3.googleusercontent.com/grass-cs/AABkmLegWpgANaFBNwRW7uMsRT3qCovwgs4Qgecr-J1QeSL1PYz7sKOiJ07G6jSQGf2GticJ9elIcBlJk0moKleBfVObHGbyfrROYEzF9NsEGLPf1km1s4ZBEyT4xiNEbru8m5OvkrCg=w800-h500-k-no","sv":"https://streetviewpixels-pa.googleapis.com/v1/thumbnail?panoid=EMmaSnvc5vXay-t-mG8SfA&cb_client=search.gws-prod.grass&w=408&h=240&yaw=335.2022&pitch=4.291544&thumbfov=100","web":null},{"id":21,"name":"TEXTILE house second hand","street":"Námestie hraničiarov 2997/2","cat":"Predajňa odevov","kind":"sekac","addr":"Námestie hraničiarov 2997/2, 851 03 Petržalka","lat":48.121936,"lng":17.114281,"pid":"ChIJL8BkNgqJbEcRI1mUy-6CV7o","hours":[[],[[600,1140]],[[600,1140]],[[600,1140]],[[600,1140]],[[600,1140]],[[540,1020]]],"photo":"https://lh3.googleusercontent.com/grass-cs/AABkmLfiudjdT8dmGin_MGkWWsKA5YjlIsHknHq0jSVBSVTtCf9iV2SaRigvNqNBMg-bfi0h_s7Q6BlCXFv3pHq0KIwBPMYauGeGnTEVGmvNiuXW0Nxm9yMePkysgRthuzPh42sj9ifn=w800-h500-k-no","sv":"https://streetviewpixels-pa.googleapis.com/v1/thumbnail?panoid=AsQ10-kd9QPMtks6KWN6Vw&cb_client=search.gws-prod.grass&w=211&h=120&yaw=195.45587&pitch=1.6914066&thumbfov=100","web":"http://www.textilehouse.sk/"},{"id":22,"name":"ŠancElizé – káva, textil, drogéria","street":"Šancová 4009/52","cat":"Bazár oblečenia","kind":"sekac","addr":"Šancová 4009/52, 811 05 Bratislava","lat":48.156539,"lng":17.114019,"pid":"ChIJT31zLxyJbEcRJmGkuodqhS4","hours":null,"photo":"https://lh3.googleusercontent.com/grass-cs/AABkmLfIrR-6zgu9Qr9vbNwm17ZzGduYEtsgqIikem4FJzg1aIVG0-XDkUWNgbe8Nn8agjVEPs7bheIzhSZHcXbwRDJofvoWJ4AebBoSgFoyo9P5yhhqTSBDsEh--837Zmb4jNE3wn54_g=w800-h500-k-no","sv":"https://streetviewpixels-pa.googleapis.com/v1/thumbnail?panoid=jDGVl_v_KKuUE8AXSUnaqQ&cb_client=search.gws-prod.grass&w=211&h=120&yaw=169.28079&pitch=0&thumbfov=100","web":"http://sancelize.sumupstore.com/"},{"id":23,"name":"Luxusný Bazár","street":"Kollárovo námestie 15","cat":"Predajňa odevov","kind":"vintage","addr":"Kollárovo námestie 15, 811 06 Staré Mesto","lat":48.149091,"lng":17.113025,"pid":"ChIJ7XTaUGSJbEcR6T_xp0I-QJE","hours":[[],[[720,1080]],[[720,1080]],[[720,1080]],[[720,1080]],[[720,1080]],[]],"photo":"https://lh3.googleusercontent.com/grass-cs/AABkmLfxdYAXrVi9p9fECbBTSlUk2_tc_P1QlUA1HQSyFbPJJ7skl2Y3RKVdFiZvWHAluSiPlwU6wFthjeT-5WSaUK_zoDoy-5U6Etm1rQtSu-oo0ZiIXWxim_6YSmIsaI8xqQ_B08I_=w800-h500-k-no","sv":"https://streetviewpixels-pa.googleapis.com/v1/thumbnail?panoid=Ty6AA2LyNXSkDVrQXjqRdw&cb_client=search.gws-prod.grass&w=211&h=120&yaw=231.64494&pitch=0&thumbfov=100","web":null},{"id":24,"name":"Bazar by Mykhaila","street":"Továrenská 2586/14","cat":"Bazár oblečenia","kind":"sekac","addr":"Továrenská 2586/14, 811 09 Bratislava","lat":48.145162,"lng":17.126323,"pid":"ChIJi4TyWbqJbEcRTMKsrJ3Ps5A","hours":null,"photo":null,"sv":"https://streetviewpixels-pa.googleapis.com/v1/thumbnail?panoid=Ol6x88KP9hcj9BPvGw-zxw&cb_client=search.gws-prod.grass&w=408&h=240&yaw=137.57701&pitch=0&thumbfov=100","web":null},{"id":25,"name":"Swap Shop","street":"Fedinova 8","cat":"Bazár oblečenia","kind":"swap","addr":"Fedinova 8, 851 01 Petržalka","lat":48.118226,"lng":17.10435,"pid":"ChIJh6b-3FOJbEcRedxrU6qu8Y4","hours":[[],[[600,780]],[[1020,1200]],[[720,900]],[[1020,1200]],[[600,780]],[]],"photo":"https://lh3.googleusercontent.com/grass-cs/AABkmLcjGMRJG0dbBl6S_MGSePg_XPhbdPb1FwnGKw36bsRta8R5VmtHrAYrXOHWky5rd54c_E_8BTc1ezAWcxJSUuvClt6HpDtZRu08SmcL3GpXRAZ3DKx1lrBRWH32g-LY24VJjUz9Sw=w800-h500-k-no","sv":"https://streetviewpixels-pa.googleapis.com/v1/thumbnail?panoid=EoB5V0uffMP-9H6vvp7kAQ&cb_client=search.gws-prod.grass&w=211&h=120&yaw=339.94336&pitch=0&thumbfov=100","web":"https://www.facebook.com/swapshopBA"},{"id":26,"name":"REZKE Bratislava OD Slimák","street":"Hálkova 1","cat":"Obchod second hand","kind":"swap","addr":"Hálkova 1, 831 03 Bratislava","lat":48.170093,"lng":17.129613,"pid":"ChIJu65hDACPbEcRlZ8cpld4btk","hours":[[],[[600,1080]],[[600,1080]],[[600,1080]],[[600,1080]],[[600,1080]],[[540,780]]],"photo":"https://lh3.googleusercontent.com/grass-cs/AABkmLfpfbOD3Wy5Hoplcn_HnmVzNa0I3ciAk7Zp4s1HwgIQ-a0uDfpX5zwsi58TjErU6IhJaxOFYoMWfMXbvtbNLsVrKw6SvN3j79oCAMhLU7SUw27wurY08xsk3uE_Pa0LCEIfdM--JMzrrSk=w800-h500-k-no","sv":null,"web":"http://www.rezke.sk/"},{"id":27,"name":"TEXTILE house second hand","street":"M. Schneidera-Trnavského 4","cat":"Predajňa odevov","kind":"sekac","addr":"M. Schneidera-Trnavského 4, 841 01 Dúbravka","lat":48.179429,"lng":17.044387,"pid":"ChIJr2Bxpj2NbEcRofdVf_HOFB4","hours":[[],[[540,1140]],[[540,1140]],[[540,1140]],[[540,1140]],[[540,1140]],[[540,1020]]],"photo":"https://lh3.googleusercontent.com/grass-cs/AABkmLczkMpg3cLkzCCBhz5anTUu3heYVTzUP7mzosaMM2Mk4cCXWMCwGP6i7he_lcBwyg0wWwJflfVYEmpyxEdSaspgtFbhn_f_hqDw1LJMHmVmTeq7hWoGN6e7aJyGfgwun6xrXdt7=w800-h500-k-no","sv":"https://streetviewpixels-pa.googleapis.com/v1/thumbnail?panoid=UEalpx9_7Q8glO6_LGhkbw&cb_client=search.gws-prod.grass&w=211&h=120&yaw=0.5800701&pitch=-3.4011128&thumbfov=100","web":"https://textilehouse.sk/"},{"id":28,"name":"Flea Market Trnavská","street":"Trnavská cesta 33","cat":"Blší trh","kind":"trh","addr":"Trnavská cesta 33, 821 08 Bratislava","lat":48.167019,"lng":17.141334,"pid":"ChIJnT5XTM-ObEcRcTxJduujy5o","hours":[[[420,780]],[],[],[],[],[],[]],"photo":"https://lh3.googleusercontent.com/grass-cs/AABkmLe5-BVT973TdDCU-SMQzbxWtp8SUk_B_lZzazIdE919VbF_sc-05kxdvC6mMOyC4D8o5fXYQ496RPLsRg21uWuFR1LJup0AZ-egbZxFdw4WSJQoTlvSBkp_BSKVuvC82OS4ARvT3A=w800-h500-k-no","sv":"https://streetviewpixels-pa.googleapis.com/v1/thumbnail?panoid=VVsFXI2zPL70GCagQB0UzA&cb_client=search.gws-prod.grass&w=211&h=120&yaw=137.6124&pitch=0&thumbfov=100","web":null},{"id":29,"name":"RoVi Secondhand","street":"OD Saratov II","cat":"Obchod second hand","kind":"sekac","addr":"OD Saratov II, Saratovská 9, 841 02 Dúbravka","lat":48.192087,"lng":17.034061,"pid":"ChIJYwKwx7yNbEcRxZAKeeq2zVA","hours":[[],[[630,1110]],[[630,1110]],[[630,1110]],[[630,1110]],[],[]],"photo":null,"sv":"https://streetviewpixels-pa.googleapis.com/v1/thumbnail?panoid=4m85WLIC0C_eazag8jLmEg&cb_client=search.gws-prod.grass&w=408&h=240&yaw=77.3452&pitch=0&thumbfov=100","web":null},{"id":30,"name":"Veľká susedská burza (blší trh)","street":"Na Pántoch 8","cat":"Blší trh","kind":"trh","addr":"Na Pántoch 8, 831 06 Rača","lat":48.215945,"lng":17.17678,"pid":"ChIJaefelF2PbEcRsz6xweqasOE","hours":[[[480,780]],[[780,1020]],[[780,1020]],[[780,1020]],[[780,1020]],[[780,1020]],[]],"photo":"https://lh3.googleusercontent.com/grass-cs/AABkmLcWcz7gTh9WSSILoI92S2KihyKNBnFpP7rTv3Y3zfBKyt_HALwwLw9_jrTavMMVJy1CJTGfU_lRaQ4xS8X-VwNtYUSGRs2pzONEivAJVvjGzq9PGmYOP-vAHyZOpgqVZg0c6X8RoBmSJvQ=w800-h500-k-no","sv":"https://streetviewpixels-pa.googleapis.com/v1/thumbnail?panoid=qPH4v4NBsajuacZlJ0Ce1Q&cb_client=search.gws-prod.grass&w=211&h=120&yaw=303.98077&pitch=0&thumbfov=100","web":"https://www.facebook.com/velkasusedskaburza/"},{"id":31,"name":"Charity Shop","street":"Rajecká 13","cat":"Charitatívny second hand","kind":"swap","addr":"Rajecká 13, 821 07 Bratislava","lat":48.142781,"lng":17.206249,"pid":"ChIJb00LSKqIbEcRykCnilA9UN8","hours":null,"photo":null,"sv":"https://streetviewpixels-pa.googleapis.com/v1/thumbnail?panoid=_bKUM0xUfUiOoDk7WsbISw&cb_client=search.gws-prod.grass&w=408&h=240&yaw=80.20209&pitch=0&thumbfov=100","web":null},{"id":32,"name":"Army Sekáč","street":"Nezvalova 51","cat":"Obchod second hand","kind":"sekac","addr":"Nezvalova 51, 821 06 Bratislava","lat":48.129842,"lng":17.21676,"pid":"ChIJwSAD7TCHbEcRWxicgkrQ-MM","hours":null,"photo":null,"sv":"https://streetviewpixels-pa.googleapis.com/v1/thumbnail?panoid=bAfwIE_9VyjGUo21RJ3fEw&cb_client=search.gws-prod.grass&w=408&h=240&yaw=53.75918&pitch=0&thumbfov=100","web":null},{"id":33,"name":"KOLO Karlova Ves","street":"Bývalý OD Kotva","cat":"Centrum opätovného použitia","kind":"swap","addr":"Bývalý OD Kotva, Jurigovo námestie, 841 04 Karlova Ves","lat":48.151795,"lng":17.060486,"pid":"ChIJue3Cqd2LbEcRu0WDTDA4sjQ","hours":[[],[],[],[],[[840,1080]],[[840,1080]],[[600,960]]],"photo":"https://lh3.googleusercontent.com/grass-cs/AABkmLe2O_CCsgZfVl8be9W1u0co_57UmVsRNh--sfGMcYU-GKSWuqxq8_g_JMhnBSExIDbVErLiX5SvEfs9-9igY8hF2lwgQQoaXc4W_ZovekbGBqRqQMDuUXv1tl18Sf5uTDmt7HCD6A=w800-h500-k-no","sv":"https://streetviewpixels-pa.googleapis.com/v1/thumbnail?panoid=FDBVgph1V2AZSim604rH9A&cb_client=search.gws-prod.grass&w=211&h=120&yaw=316.657&pitch=0&thumbfov=100","web":"https://www.olo.sk/kolo"},{"id":34,"name":"LALA Market Shop","street":"Wolkrova 1105/37","cat":"Second hand svadobné šaty","kind":"vintage","addr":"Wolkrova 1105/37, 851 01 Petržalka","lat":48.125777,"lng":17.11089,"pid":"ChIJXQytwjar6WQRTnm8YR45jkY","hours":[[],[[540,1080]],[[540,1080]],[[540,1080]],[[540,1080]],[[540,1080]],[]],"photo":"https://lh3.googleusercontent.com/grass-cs/AABkmLdubreS0a7KyYahxyQZBrAq9EwSyJU0eWmj5J0YVNp2lnCurOs6wp6oevCurSinunjiWQId7baNHuwlPOU04dF-7k_qyvRRXTqwqXK6yMoMsd9g45lyZYN8DKE4t2YNZoMVs7fCD3WLF3zp=w800-h500-k-no","sv":"https://streetviewpixels-pa.googleapis.com/v1/thumbnail?panoid=KxWfaieBtkDlVTG3VEdZHw&cb_client=search.gws-prod.grass&w=211&h=120&yaw=0.6720239&pitch=0&thumbfov=100","web":"https://www.lalamarketshop.sk/"},{"id":35,"name":"Flace Resell Store","street":"Mickiewiczova 4","cat":"Resell / second hand","kind":"vintage","addr":"Mickiewiczova 4, 811 07 Bratislava","lat":48.149745,"lng":17.115427,"pid":"ChIJJfNDdrqJbEcRcIHYLU6r8QA","hours":[[],[[720,1140]],[[720,1140]],[[720,1140]],[[720,1140]],[[720,1140]],[]],"photo":"https://lh3.googleusercontent.com/grass-cs/AABkmLeKEJESD88JT0gMRrtEn9RVaASp--sj1ojg9T4lKWp2tpmGM9TwKfv_bbLpwvepzfAXZLPZUwjHlHvai7QJxUIj12xLA8dewwklQ_OrGz721qAoE-_eKOdRa4lb-iy1wNm_OhRs=w800-h500-k-no","sv":"https://streetviewpixels-pa.googleapis.com/v1/thumbnail?panoid=-0Ndq32LteSlzGvqylFHgA&cb_client=search.gws-prod.grass&w=211&h=120&yaw=147.24657&pitch=0&thumbfov=100","web":"http://flace.sk/"},{"id":36,"name":"Agregi vintage","street":"Múzejná 68/2","cat":"Vintage odevy","kind":"vintage","addr":"Múzejná 68/2, 811 02 Bratislava","lat":48.140999,"lng":17.114064,"pid":"ChIJP9lNz9KJbEcRNZ_q1pmG46g","hours":[[],[[720,1080]],[[720,1080]],[[720,1080]],[[720,1080]],[[720,1080]],[[600,960]]],"photo":"https://lh3.googleusercontent.com/grass-cs/AABkmLfVETLfBwpyHGHYMbif3IlofcX0c28GWotXN19tZDYuNql5O9gHzuiXTmHe9K88W6kKAIHa5eyvUwLMzrtypfuof_0-4GxIKr-eRCiGMT_NHkZPbDlRo4yZ1CEcw9WTH_rNZKmNeQqcVMm7=w800-h500-k-no","sv":"https://streetviewpixels-pa.googleapis.com/v1/thumbnail?panoid=WfJJ2GraP28474_kbDfHdA&cb_client=search.gws-prod.grass&w=211&h=120&yaw=282.62967&pitch=0&thumbfov=100","web":null},{"id":37,"name":"Medina Vintage","street":"Štefanovičova","cat":"Vintage odevy","kind":"vintage","addr":"Štefanovičova, 811 04 Bratislava","lat":48.154944,"lng":17.10868,"pid":"ChIJg70kPlGJbEcR86zHVqRfqxc","hours":null,"photo":null,"sv":"https://streetviewpixels-pa.googleapis.com/v1/thumbnail?panoid=ncgL4FZTAWCtJGg6aVzElA&cb_client=search.gws-prod.grass&w=408&h=240&yaw=175.8949&pitch=0&thumbfov=100","web":null},{"id":38,"name":"LUXED","street":"Trenčianska 453/47","cat":"Luxusný bazár","kind":"vintage","addr":"Trenčianska 453/47, 821 09 Bratislava","lat":48.152608,"lng":17.139092,"pid":"ChIJLbfr_EOJbEcRIr-Vphni6lc","hours":[[],[[840,1080]],[[840,1080]],[[840,1080]],[[840,1080]],[[840,1080]],[]],"photo":"https://lh3.googleusercontent.com/grass-cs/AABkmLcp4nYprolw4QuAJ7llbSn7kjFkg0dc7sYajPcEHR2rTJ20eFuBCNG9NREfxEYeg_SNMbuJtFS4U0fy9JyQCZhAoWG3-C-ffz-7Y_R1h-hyf_FQHC_c7eRBcgiyygclUPlpTupO=w800-h500-k-no","sv":null,"web":null},{"id":39,"name":"mm studio","street":"Ivanská cesta","cat":"Bazár oblečenia","kind":"sekac","addr":"Ivanská cesta, 821 04 Bratislava","lat":48.171486,"lng":17.191492,"pid":"ChIJscsv8IuPbEcRIPT62pPCcvk","hours":null,"photo":null,"sv":null,"web":null},{"id":40,"name":"KOLO Ružinov","street":"Pestovateľská 821/04","cat":"Centrum opätovného použitia","kind":"swap","addr":"Pestovateľská 821/04, 821 04 Bratislava","lat":48.170429,"lng":17.182533,"pid":"ChIJe9ED40iPbEcRhi_cXmJMfbo","hours":[[[600,1020]],[],[[600,1080]],[[600,1080]],[[600,1080]],[[600,1080]],[[600,1020]]],"photo":"https://lh3.googleusercontent.com/grass-cs/AABkmLdR-Tjmv0tcUrUX4EIqV5USuYyEuBUDALaniEdgtQfpZFLHeGpRnaUXkJze5f0teEJd97g1eChWzR7xmgNlE7dbJLhpAMeq_25SIV7-EO7TEEw00Kf9ICNZXm7KEurHFXW60sBf=w800-h500-k-no","sv":"https://streetviewpixels-pa.googleapis.com/v1/thumbnail?panoid=N019ttVlwW3TSHDH3Lv07Q&cb_client=search.gws-prod.grass&w=114&h=120&yaw=68.850235&pitch=-5.60005&thumbfov=100","web":"https://www.olo.sk/kolo/"}];
+</script>
+<script>
+/* Sekáče Bratislava – mapa second handov
+   Otvorené/zatvorené sa počíta podľa bratislavského času a obnovuje sa každých 30 s. */
+(function () {
+  "use strict";
+
+  const SHOPS = window.SHOPS || [];
+  const TZ = "Europe/Bratislava";
+  const DAY_NAMES = ["Nedeľa", "Pondelok", "Utorok", "Streda", "Štvrtok", "Piatok", "Sobota"];
+  const DAY_IN = ["v nedeľu", "v pondelok", "v utorok", "v stredu", "vo štvrtok", "v piatok", "v sobotu"];
+  const KIND_LABEL = { sekac: "Sekáč", vintage: "Vintage", swap: "Swap a charita", trh: "Blší trh" };
+  const isWide = () => window.matchMedia("(min-width: 900px)").matches;
+
+  const state = { onlyOpen: false, kinds: new Set(), selected: null, me: null, follow: false };
+
+  /* ---------- čas ---------- */
+  const WD = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+  let fmtParts = null;
+  try {
+    fmtParts = new Intl.DateTimeFormat("en-GB", { timeZone: TZ, weekday: "short", hour: "2-digit", minute: "2-digit", hour12: false });
+  } catch (e) { fmtParts = null; }
+  function nowBA() {
+    if (!fmtParts) { const d = new Date(); return { day: d.getDay(), min: d.getHours() * 60 + d.getMinutes() }; }
+    const p = {};
+    fmtParts.formatToParts(new Date()).forEach(x => { p[x.type] = x.value; });
+    const h = parseInt(p.hour, 10) % 24;
+    return { day: WD[p.weekday], min: h * 60 + parseInt(p.minute, 10) };
+  }
+  const hhmm = m => `${Math.floor(m / 60)}:${String(m % 60).padStart(2, "0")}`;
+  const rangeTxt = r => (r[0] === 0 && r[1] >= 1440 ? "nonstop" : `${hhmm(r[0])} – ${hhmm(r[1])}`);
+
+  function status(shop, t) {
+    t = t || nowBA();
+    const H = shop.hours;
+    if (!H) return { code: "unknown", text: "Hodiny neznáme", sub: "over si ich v Google Mapách" };
+    const today = H[t.day] || [];
+    for (const r of today) {
+      if (t.min >= r[0] && t.min < r[1]) {
+        if (r[1] >= 1440) return { code: "open", text: "Otvorené", sub: "nonstop" };
+        const left = r[1] - t.min;
+        return { code: "open", text: "Otvorené", sub: left <= 45 ? `zatvára o ${hhmm(r[1])} (o ${left} min)` : `zatvára o ${hhmm(r[1])}`, soon: left <= 45 };
+      }
+    }
+    const later = today.find(r => r[0] > t.min);
+    if (later) return { code: "closed", text: "Zatvorené", sub: `otvára dnes o ${hhmm(later[0])}` };
+    for (let k = 1; k <= 7; k++) {
+      const d = (t.day + k) % 7;
+      if (H[d] && H[d].length) return { code: "closed", text: "Zatvorené", sub: `otvára ${k === 1 ? "zajtra" : DAY_IN[d]} o ${hhmm(H[d][0][0])}` };
+    }
+    return { code: "closed", text: "Zatvorené", sub: "" };
+  }
+
+  /* ---------- vzdialenosť ---------- */
+  function distM(a, b) {
+    const R = 6371000, toR = x => x * Math.PI / 180;
+    const dLat = toR(b.lat - a.lat), dLng = toR(b.lng - a.lng);
+    const s = Math.sin(dLat / 2) ** 2 + Math.cos(toR(a.lat)) * Math.cos(toR(b.lat)) * Math.sin(dLng / 2) ** 2;
+    return 2 * R * Math.asin(Math.sqrt(s));
+  }
+  function distTxt(m) {
+    const walk = Math.round((m * 1.25) / 80);
+    const d = m < 1000 ? `${Math.round(m / 10) * 10} m` : `${(m / 1000).toFixed(1).replace(".", ",")} km`;
+    return { d, walk: walk <= 60 ? `${Math.max(1, walk)} min pešo` : "" };
+  }
+
+  /* ---------- odkazy ---------- */
+  const gmapsUrl = s => `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(s.name + ", " + s.addr)}&query_place_id=${s.pid}`;
+  const routeUrl = s => `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(s.name + ", " + s.addr)}&destination_place_id=${s.pid}&travelmode=walking`;
+  const photoOf = s => s.photo || (s.sv ? s.sv.replace(/&w=\d+&h=\d+/, "&w=800&h=500") : null);
+  const initials = n => n.replace(/[^A-Za-zÀ-žÁ-ž0-9 ]/g, "").split(/\s+/).filter(Boolean).slice(0, 2).map(w => w[0]).join("").toUpperCase();
+  const esc = s => String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+  /* ---------- mapa ---------- */
+  if (!window.L) {
+    document.getElementById("map").innerHTML = '<p class="map-fail">Mapu sa nepodarilo spustiť. Obnov stránku.</p>';
+    return;
+  }
+  const dark = window.matchMedia("(prefers-color-scheme: dark)");
+  const map = L.map("map", {
+    zoomControl: false, attributionControl: true, zoomSnap: 0.5, tapTolerance: 20,
+    bounceAtZoomLimits: false, maxBounds: [[47.95, 16.75], [48.40, 17.50]], minZoom: 11,
+  }).setView([48.147, 17.113], 14);
+  map.attributionControl.setPrefix(false);
+
+  // Mapový podklad: OpenStreetMap (rovnako ako v projekte Detva).
+  // Oficiálne dlaždice tile.openstreetmap.org vyžadujú, aby stránka bežala na webovej adrese (http/https),
+  // lebo podľa pravidiel OSM musí prehliadač poslať hlavičku Referer. Pri otvorení súboru priamo z disku
+  // (file://) sa Referer neposiela a OSM vráti „Access blocked“ – vtedy použijeme komunitný
+  // OSM server openstreetmap.de, ktorý funguje aj bez nej.
+  const OSM_ATTR = '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> prispievatelia';
+  const onWeb = location.protocol === "https:" || location.protocol === "http:";
+  const tiles = onWeb
+    ? L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+        maxZoom: 19, attribution: OSM_ATTR, referrerPolicy: "strict-origin-when-cross-origin",
+      })
+    : L.tileLayer("https://tile.openstreetmap.de/{z}/{x}/{y}.png", {
+        maxZoom: 19, attribution: OSM_ATTR + " · openstreetmap.de",
+      });
+  tiles.addTo(map);
+
+  const ICONS = {
+    sekac: '<svg viewBox="0 0 24 24"><path d="M12 3a2.6 2.6 0 0 0-1 5v1.2L2.6 15a1.6 1.6 0 0 0 .9 3h17a1.6 1.6 0 0 0 .9-3L13 9.2V8a1 1 0 1 0-1-1 1 1 0 0 1-2 0 2.6 2.6 0 1 1 3.5 2.4"/></svg>',
+    vintage: '<svg viewBox="0 0 24 24"><path d="M12 2l2.6 6.4L21 9l-5 4.3L17.5 20 12 16.6 6.5 20 8 13.3 3 9l6.4-.6z"/></svg>',
+    swap: '<svg viewBox="0 0 24 24"><path d="M7 4l-4 4 4 4V9h9V7H7zm10 8v3H8v2h9v3l4-4z"/></svg>',
+    trh: '<svg viewBox="0 0 24 24"><path d="M3 9l2-5h14l2 5v1a3 3 0 0 1-6 0 3 3 0 0 1-6 0 3 3 0 0 1-6 0zm2 4.5V20h14v-6.5a4.9 4.9 0 0 1-4-.9 5 5 0 0 1-6 0 4.9 4.9 0 0 1-4 .9z"/></svg>',
+  };
+  const COLOR = { open: "var(--open)", closed: "var(--closed)", unknown: "var(--unknown)" };
+
+  // väčšia dotyková plocha (44 px) okolo menšieho viditeľného pinu
+  function pinIcon(shop, st, selected) {
+    return L.divIcon({
+      className: "pin-wrap",
+      iconSize: [44, 44], iconAnchor: [22, 22],
+      html: `<div class="pin ${st.code === "open" ? "is-open" : ""} ${selected ? "is-selected" : ""}" style="--c:${COLOR[st.code]}">${ICONS[shop.kind] || ""}</div>`,
+    });
+  }
+
+  const markers = new Map();
+  SHOPS.forEach(s => {
+    const m = L.marker([s.lat, s.lng], { title: s.name, keyboard: true, bubblingMouseEvents: false });
+    m.on("click", () => openShop(s.id, false));
+    m.addTo(map);
+    markers.set(s.id, m);
+  });
+
+  function visible(s, st) {
+    if (state.onlyOpen && st.code !== "open") return false;
+    if (state.kinds.size && !state.kinds.has(s.kind)) return false;
+    return true;
+  }
+
+  const lastIcon = new Map();
+  function refresh() {
+    const t = nowBA();
+    let open = 0, shown = 0;
+    SHOPS.forEach(s => {
+      const st = status(s, t);
+      if (st.code === "open") open++;
+      const m = markers.get(s.id);
+      const key = st.code + (state.selected === s.id ? "*" : "");
+      if (lastIcon.get(s.id) !== key) { m.setIcon(pinIcon(s, st, state.selected === s.id)); lastIcon.set(s.id, key); }
+      m.setZIndexOffset(state.selected === s.id ? 2000 : st.code === "open" ? 500 : st.code === "closed" ? 100 : 0);
+      const v = visible(s, st) || state.selected === s.id;
+      if (v) { shown++; if (!map.hasLayer(m)) m.addTo(map); }
+      else if (map.hasLayer(m)) map.removeLayer(m);
+    });
+    document.getElementById("summary").innerHTML =
+      `<b>${open} otvorených</b> z ${SHOPS.length} · ${DAY_NAMES[t.day].toLowerCase()} ${hhmm(t.min)}`;
+    if (state.selected != null) renderSheet(SHOPS.find(s => s.id === state.selected), true);
+    if (listEl.classList.contains("is-open")) renderList();
+    renderNearest();
+    return shown;
+  }
+
+  /* ---------- spodný panel (detail) ---------- */
+  const sheet = document.getElementById("sheet");
+  const body = document.getElementById("sheet-body");
+
+  function photoBlock(s) {
+    const src = photoOf(s);
+    const ph = `<div class="ph">${esc(initials(s.name))}</div>`;
+    if (!src) return `<figure class="photo">${ph}</figure>`;
+    return `<figure class="photo">${ph}
+      <img src="${esc(src)}" alt="${esc(s.name)}" decoding="async" referrerpolicy="no-referrer" onerror="this.remove()">
+      <figcaption>${s.photo ? "Foto: Google Mapy" : "Street View"}</figcaption></figure>`;
+  }
+
+  function hoursTable(s, t) {
+    if (!s.hours) return `<p class="note">Google Mapy pre tento obchod otváracie hodiny neuvádzajú.</p>`;
+    const order = [1, 2, 3, 4, 5, 6, 0];
+    const rows = order.map(d => {
+      const rs = s.hours[d];
+      const val = rs && rs.length ? rs.map(rangeTxt).join(", ") : `<span class="off">zatvorené</span>`;
+      return `<tr class="${d === t.day ? "today" : ""}"><td>${DAY_NAMES[d]}</td><td>${val}</td></tr>`;
+    }).join("");
+    return `<table class="hours"><caption>Otváracie hodiny</caption><tbody>${rows}</tbody></table>`;
+  }
+
+  function renderSheet(s, keepScroll) {
+    if (!s) return;
+    const t = nowBA();
+    const st = status(s, t);
+    const scroll = body.scrollTop;
+    let dist = "";
+    if (state.me) {
+      const x = distTxt(distM(state.me, s));
+      dist = `<span class="s-dist">${x.d}${x.walk ? " · " + x.walk : ""}</span>`;
+    }
+    body.innerHTML = `
+      <div class="s-top">
+        ${photoBlock(s)}
+        <div class="s-head">
+          <span class="s-kind">${esc(KIND_LABEL[s.kind])} · ${esc(s.cat)}</span>
+          <h2 class="s-name" id="s-name">${esc(s.name)}</h2>
+          <p class="s-addr">${esc(s.addr)}${dist ? " · " + dist : ""}</p>
+        </div>
+      </div>
+      <div class="status ${st.soon ? "is-soon" : ""}" style="--c:${COLOR[st.code]}">
+        <i class="dot"></i><div><strong>${st.text}</strong>${st.sub ? ` <span>· ${esc(st.sub)}</span>` : ""}</div>
+      </div>
+      <div class="actions">
+        <a class="btn btn-primary" href="${gmapsUrl(s)}" target="_blank" rel="noopener">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 2a7 7 0 0 0-7 7c0 5.2 7 13 7 13s7-7.8 7-13a7 7 0 0 0-7-7zm0 9.5A2.5 2.5 0 1 1 12 6.5a2.5 2.5 0 0 1 0 5z"/></svg>
+          Google Mapy</a>
+        <a class="btn" href="${routeUrl(s)}" target="_blank" rel="noopener">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M21.7 11.3l-9-9a1 1 0 0 0-1.4 0l-9 9a1 1 0 0 0 0 1.4l9 9a1 1 0 0 0 1.4 0l9-9a1 1 0 0 0 0-1.4zM14 14.5V12h-4v3H8v-4a1 1 0 0 1 1-1h5V7.5l3.5 3.5z"/></svg>
+          Navigovať</a>
+      </div>
+      ${hoursTable(s, t)}
+      ${s.web ? `<a class="web" href="${esc(s.web)}" target="_blank" rel="noopener">Web / Facebook obchodu →</a>` : ""}
+      <p class="note">Hodiny podľa Google Máp. Cez sviatky sa môžu líšiť.</p>`;
+    if (keepScroll) body.scrollTop = scroll;
+  }
+
+  // Panel má na mobile dve polohy: "peek" (spodná časť) a "full" (takmer celá obrazovka).
+  function setSnap(el, snap) {
+    el.dataset.snap = snap;
+    el.classList.add("is-open");
+    el.setAttribute("aria-hidden", "false");
+    document.body.classList.add("has-sheet");
+  }
+  function hideSheetEl(el) {
+    el.classList.remove("is-open");
+    el.setAttribute("aria-hidden", "true");
+    el.style.height = "";
+    if (!sheet.classList.contains("is-open") && !listEl.classList.contains("is-open")) document.body.classList.remove("has-sheet");
+  }
+
+  function openShop(id, fly) {
+    const s = SHOPS.find(x => x.id === id);
+    if (!s) return;
+    state.selected = id;
+    hideSheetEl(listEl);
+    renderSheet(s);
+    body.scrollTop = 0;
+    setSnap(sheet, "peek");
+    refresh();
+    requestAnimationFrame(() => centerOn(s, fly));
+  }
+  function centerOn(s, fly) {
+    const z = fly ? Math.max(map.getZoom(), 16) : map.getZoom();
+    const target = L.latLng(s.lat, s.lng);
+    const pt = map.project(target, z);
+    let off;
+    if (isWide()) off = L.point(-210, 0);
+    else {
+      const visibleH = map.getSize().y - sheet.offsetHeight; // časť mapy nad panelom
+      off = L.point(0, map.getSize().y / 2 - Math.max(120, visibleH / 2 + 20));
+    }
+    map.flyTo(map.unproject(pt.add(off), z), z, { duration: .45 });
+  }
+
+  function closeSheet() {
+    hideSheetEl(sheet);
+    state.selected = null;
+    refresh();
+  }
+  document.getElementById("s-close").addEventListener("click", closeSheet);
+  map.on("click", () => { if (state.selected != null) closeSheet(); hideSheetEl(listEl); });
+
+  // ťahanie panela prstom: hore = roztiahnuť, dole = zmenšiť / zavrieť
+  function makeDraggable(el, onClose) {
+    const handle = el.querySelector(".sheet-handle");
+    const scroller = el.querySelector(".sheet-body, .list");
+    let y0 = null, dy = 0, h0 = 0, t0 = 0, fromScroller = false, active = false;
+    el.addEventListener("touchstart", e => {
+      if (isWide()) return;
+      fromScroller = !handle.contains(e.target);
+      y0 = e.touches[0].clientY; dy = 0; t0 = Date.now(); h0 = el.offsetHeight; active = !fromScroller;
+    }, { passive: true });
+    el.addEventListener("touchmove", e => {
+      if (y0 == null) return;
+      dy = e.touches[0].clientY - y0;
+      if (!active) {
+        // z obsahu: ťahanie hore v "peek" roztiahne panel, ťahanie dole na vrchu obsahu ho zmenší
+        const atTop = scroller.scrollTop <= 0;
+        if (Math.abs(dy) < 8) return;
+        if (dy < 0 && el.dataset.snap === "peek") active = true;
+        else if (dy > 0 && atTop) active = true;
+        else { y0 = null; return; }
+      }
+      if (e.cancelable) e.preventDefault();
+      el.classList.add("is-dragging");
+      const maxH = window.innerHeight * 0.94;
+      el.style.height = Math.min(maxH, Math.max(80, h0 - dy)) + "px";
+    }, { passive: false });
+    function end() {
+      if (y0 == null) return;
+      const was = active; y0 = null; active = false;
+      el.classList.remove("is-dragging");
+      el.style.height = "";
+      if (!was) return;
+      const fast = Math.abs(dy) / Math.max(1, Date.now() - t0) > 0.45;
+      if (dy < -50 || (fast && dy < -15)) setSnap(el, "full");
+      else if (dy > 70 || (fast && dy > 15)) {
+        if (el.dataset.snap === "full" && dy < h0 * 0.6) setSnap(el, "peek"); else onClose();
+      }
+    }
+    el.addEventListener("touchend", end);
+    el.addEventListener("touchcancel", end);
+    handle.addEventListener("click", () => setSnap(el, el.dataset.snap === "full" ? "peek" : "full"));
+  }
+
+  /* ---------- zoznam ---------- */
+  const listEl = document.getElementById("list");
+  const listItems = document.getElementById("list-items");
+
+  function sortedRows(t) {
+    const rank = { open: 0, closed: 1, unknown: 2 };
+    return SHOPS.map(s => ({ s, st: status(s, t), d: state.me ? distM(state.me, s) : null }))
+      .filter(r => visible(r.s, r.st))
+      .sort((a, b) => a.d != null ? a.d - b.d : (rank[a.st.code] - rank[b.st.code]) || a.s.name.localeCompare(b.s.name, "sk"));
+  }
+  function renderList() {
+    const rows = sortedRows(nowBA());
+    document.getElementById("list-sub").textContent = state.me
+      ? `${rows.length} miest zoradených podľa vzdialenosti od teba.`
+      : `${rows.length} miest, otvorené hore. Zapni polohu a zoradím ich podľa vzdialenosti.`;
+    listItems.innerHTML = rows.map(({ s, st, d }) => {
+      const src = photoOf(s);
+      return `<li><button data-id="${s.id}">
+        <span class="thumb" data-i="${esc(initials(s.name))}">${src ? `<img src="${esc(src)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.remove()">` : ""}</span>
+        <span class="li-main"><span class="li-name">${esc(s.name)}</span>
+          <span class="li-sub"><i class="dot" style="background:${COLOR[st.code]}"></i>${esc(st.code === "unknown" ? "bez hodín" : st.text + (st.sub ? " · " + st.sub : ""))}</span>
+          <span class="li-sub li-street">${esc(s.street)}</span></span>
+        <span class="li-dist">${d != null ? distTxt(d).d : ""}</span>
+      </button></li>`;
+    }).join("");
+  }
+  listItems.addEventListener("click", e => {
+    const b = e.target.closest("button[data-id]");
+    if (b) openShop(+b.dataset.id, true);
+  });
+  function openList() {
+    if (state.selected != null) { hideSheetEl(sheet); state.selected = null; refresh(); }
+    renderList();
+    listItems.scrollTop = 0;
+    setSnap(listEl, "full");
+  }
+  document.getElementById("btn-list").addEventListener("click", () =>
+    listEl.classList.contains("is-open") ? hideSheetEl(listEl) : openList());
+  document.getElementById("l-close").addEventListener("click", () => hideSheetEl(listEl));
+
+  makeDraggable(sheet, closeSheet);
+  makeDraggable(listEl, () => hideSheetEl(listEl));
+
+  /* ---------- najbližší otvorený (po zapnutí polohy) ---------- */
+  const nearestEl = document.getElementById("nearest");
+  function renderNearest() {
+    if (!state.me) { nearestEl.hidden = true; return; }
+    const t = nowBA();
+    const best = SHOPS.map(s => ({ s, st: status(s, t), d: distM(state.me, s) }))
+      .filter(r => r.st.code === "open" && visible(r.s, r.st))
+      .sort((a, b) => a.d - b.d)[0];
+    if (!best) { nearestEl.hidden = true; return; }
+    const x = distTxt(best.d);
+    nearestEl.dataset.id = best.s.id;
+    nearestEl.innerHTML = `<i class="dot dot-open"></i><span class="n-txt"><small>Najbližšie otvorené</small><b>${esc(best.s.name)}</b></span><span class="n-d">${x.d}</span>`;
+    nearestEl.hidden = false;
+  }
+  nearestEl.addEventListener("click", () => openShop(+nearestEl.dataset.id, true));
+
+  /* ---------- filtre ---------- */
+  const fOpen = document.getElementById("f-open");
+  fOpen.addEventListener("click", () => {
+    state.onlyOpen = !state.onlyOpen;
+    fOpen.setAttribute("aria-pressed", String(state.onlyOpen));
+    const n = refresh();
+    if (state.onlyOpen && n === 0) toast("Momentálne nemá otvorené nič z vybraných.");
+    save();
+  });
+  document.querySelectorAll(".chip[data-kind]").forEach(b => {
+    b.addEventListener("click", () => {
+      const k = b.dataset.kind;
+      if (state.kinds.has(k)) state.kinds.delete(k); else state.kinds.add(k);
+      b.setAttribute("aria-pressed", String(state.kinds.has(k)));
+      refresh(); save();
+    });
+  });
+  function save() {
+    try { localStorage.setItem("sekace-filters", JSON.stringify({ o: state.onlyOpen, k: [...state.kinds] })); } catch (e) {}
+  }
+  try {
+    const f = JSON.parse(localStorage.getItem("sekace-filters") || "null");
+    if (f) {
+      state.onlyOpen = !!f.o; fOpen.setAttribute("aria-pressed", String(state.onlyOpen));
+      (f.k || []).forEach(k => {
+        const c = document.querySelector(`.chip[data-kind="${k}"]`);
+        if (c) { state.kinds.add(k); c.setAttribute("aria-pressed", "true"); }
+      });
+    }
+  } catch (e) {}
+
+  /* ---------- poloha (modrá gulička) ---------- */
+  const btnLoc = document.getElementById("btn-locate");
+  let meMarker = null, meCircle = null, watchId = null, firstFix = true;
+
+  function onPos(p) {
+    const { latitude: lat, longitude: lng, accuracy } = p.coords;
+    state.me = { lat, lng };
+    btnLoc.classList.remove("is-waiting");
+    btnLoc.classList.add("is-active");
+    if (!meMarker) {
+      meMarker = L.marker([lat, lng], {
+        icon: L.divIcon({ className: "me-wrap", iconSize: [22, 22], iconAnchor: [11, 11], html: '<div class="me"></div>' }),
+        interactive: false, keyboard: false, zIndexOffset: 3000,
+      }).addTo(map);
+      meCircle = L.circle([lat, lng], { radius: accuracy, color: "#1a73e8", weight: 1, opacity: .35, fillOpacity: .08, interactive: false }).addTo(map);
+    } else {
+      meMarker.setLatLng([lat, lng]);
+      meCircle.setLatLng([lat, lng]).setRadius(accuracy);
+    }
+    if (firstFix || state.follow) {
+      map.flyTo([lat, lng], Math.max(map.getZoom(), 15.5), { duration: .6 });
+      firstFix = false; state.follow = false;
+    }
+    if (state.selected != null) renderSheet(SHOPS.find(s => s.id === state.selected), true);
+    if (listEl.classList.contains("is-open")) renderList();
+    renderNearest();
+  }
+  function onErr(e) {
+    btnLoc.classList.remove("is-waiting", "is-active");
+    if (e.code === 1) toast("Prístup k polohe je zakázaný. Povoľ ho v nastaveniach prehliadača pre túto stránku.");
+    else if (e.code === 3) toast("Polohu sa nepodarilo zistiť včas. Skús to znova vonku.");
+    else toast("Polohu sa nepodarilo zistiť.");
+    if (watchId != null) { navigator.geolocation.clearWatch(watchId); watchId = null; }
+  }
+  function startLocate(userAsked) {
+    if (!("geolocation" in navigator)) { if (userAsked) toast("Tento prehliadač nevie zistiť polohu."); return; }
+    if (window.isSecureContext === false) { if (userAsked) toast("Poloha funguje len na https adrese (napr. GitHub Pages)."); return; }
+    if (watchId != null) {
+      if (state.me) map.flyTo([state.me.lat, state.me.lng], Math.max(map.getZoom(), 16), { duration: .5 });
+      else state.follow = true;
+      return;
+    }
+    btnLoc.classList.add("is-waiting");
+    watchId = navigator.geolocation.watchPosition(onPos, onErr, { enableHighAccuracy: true, maximumAge: 15000, timeout: 20000 });
+  }
+  btnLoc.addEventListener("click", () => startLocate(true));
+  if (navigator.permissions && navigator.permissions.query && window.isSecureContext !== false) {
+    navigator.permissions.query({ name: "geolocation" }).then(r => { if (r.state === "granted") startLocate(false); }).catch(() => {});
+  }
+
+  /* ---------- toast ---------- */
+  const toastEl = document.getElementById("toast");
+  let toastT;
+  function toast(msg) {
+    toastEl.textContent = msg; toastEl.hidden = false;
+    clearTimeout(toastT); toastT = setTimeout(() => { toastEl.hidden = true; }, 4500);
+  }
+
+  /* ---------- štart ---------- */
+  refresh();
+  if (isWide()) map.fitBounds(L.latLngBounds(SHOPS.map(s => [s.lat, s.lng])), { padding: [40, 40] });
+  window.addEventListener("resize", () => map.invalidateSize());
+  setInterval(refresh, 30000);
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) refresh(); });
+})();
+
+</script>
+</body>
+</html>
